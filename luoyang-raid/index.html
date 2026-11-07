@@ -1,0 +1,1651 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#07060b">
+<title>洛阳之战 · 定位演武</title>
+<style>
+  html,body{
+    margin:0;width:100%;height:100%;
+    background:#06050a;overflow:hidden;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+    touch-action:none;
+  }
+  body{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+  canvas{display:block;touch-action:none;border-radius:8px;
+    box-shadow:0 0 70px rgba(160,90,60,.20),0 0 0 1px rgba(200,170,120,.10);}
+  #rotate{
+    position:fixed;inset:0;z-index:10;display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    padding:28px;text-align:center;color:#e8dcc4;
+    font-family:"KaiTi","STKaiti","Noto Serif SC",serif;
+    background:radial-gradient(circle at 50% 42%,#221420 0%,#07060b 72%);
+  }
+  #rotate.show{display:flex;}
+  #rotate .ric{font-size:54px;color:#ffd98a;line-height:1;text-shadow:0 0 24px rgba(255,180,90,.55);animation:sp 3s ease-in-out infinite;}
+  @keyframes sp{0%,16%{transform:rotate(0)}46%,64%{transform:rotate(90deg)}94%,100%{transform:rotate(0)}}
+  #rotate .rt1{font-size:22px;letter-spacing:3px;margin-top:10px;}
+  #rotate .rt2{font-size:13px;color:rgba(220,200,170,.5);}
+  #rotate button{margin-top:24px;padding:8px 24px;border-radius:20px;background:none;
+    border:1px solid rgba(220,190,140,.35);color:rgba(235,220,195,.8);font-family:inherit;
+    font-size:14px;letter-spacing:2px;cursor:pointer;}
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="640"></canvas>
+<div id="rotate">
+  <div class="ric">⟳</div>
+  <div class="rt1">请 把 手 机 横 过 来</div>
+  <div class="rt2">团本太宽，竖屏装不下</div>
+  <button id="forcePortrait">仍 要 游 玩</button>
+</div>
+<script>
+"use strict";
+
+/* =========================================================
+   《洛阳之战 · 定位演武》
+   四定位 / 五首领 / 时间轴驱动的团本应对小游戏
+   ========================================================= */
+
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const W = 960, H = 640;
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+cv.width = W * DPR;
+cv.height = H * DPR;
+
+const ARENA = { x: 56, y: 96, w: 848, h: 508 };
+const BOSS_HOME = { x: 480, y: 222, r: 56 };
+const FONT = '"KaiTi","STKaiti","Kaiti SC","Noto Serif SC",serif';
+
+let UIS = 1, TITLE_TS = 1;
+const COARSE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+const rotateEl = document.getElementById('rotate');
+const forceBtn = document.getElementById('forcePortrait');
+let portraitForced = false;
+
+function layout() {
+  const vw = Math.max(1, window.innerWidth);
+  const vh = Math.max(1, window.innerHeight);
+  const s = Math.min(vw / W, vh / H);
+  const dw = Math.max(1, Math.round(W * s));
+  const dh = Math.max(1, Math.round(H * s));
+  cv.style.width = dw + 'px';
+  cv.style.height = dh + 'px';
+  UIS = Math.min(2, Math.max(1, W / dw));
+  TITLE_TS = Math.min(1.4, Math.max(1, UIS * 0.85));
+  syncRotate();
+}
+function syncRotate() {
+  const portrait = window.innerHeight > window.innerWidth * 1.02;
+  const need = portrait && (COARSE || game.touchMode) && !portraitForced;
+  if (rotateEl) rotateEl.classList.toggle('show', need);
+}
+if (forceBtn) forceBtn.addEventListener('click', () => { portraitForced = true; syncRotate(); });
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+const TAU = Math.PI * 2;
+
+let GOD = false;
+
+/* ---------------------- 音效 ---------------------- */
+let AC = null, muted = false;
+function audio() {
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = null; } }
+  if (AC && AC.state === 'suspended') AC.resume();
+  return AC;
+}
+function tone(freq, dur, type, vol, slide) {
+  if (muted) return;
+  const ac = audio(); if (!ac) return;
+  const t0 = ac.currentTime;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t0);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(24, slide), t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(ac.destination);
+  o.start(t0); o.stop(t0 + dur + 0.03);
+}
+const SFX = {
+  hit:    () => tone(120, 0.14, 'square', 0.035, 70),
+  heavy:  () => { tone(80, 0.3, 'sawtooth', 0.06, 40); tone(200, 0.2, 'square', 0.03, 90); },
+  heal:   () => tone(880, 0.12, 'sine', 0.03, 1180),
+  cast:   () => tone(520, 0.08, 'triangle', 0.02, 700),
+  down:   () => { [392, 294, 196].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'sine', 0.045), i * 120)); },
+  win:    () => { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.28, 'sine', 0.04), i * 110)); },
+  kill:   () => { [262, 330, 392].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'triangle', 0.05), i * 90)); },
+  skill:  () => tone(660, 0.09, 'sine', 0.025, 880),
+};
+
+/* ---------------------- 定位 ---------------------- */
+const ROLES = [
+  { id: 'tank', name: '铁牢', short: 'T', color: '#6fa8ff', rgb: '111,168,255',
+    hp: 300, speed: 158, dps: 16, home: [480, 336],
+    tagline: '站在最前面，替全队吃下最狠的那一刀',
+    duty: '首领的单体重击只会点你，开盾墙硬吃。',
+    skills: [
+      { k: 'Q', name: '盾墙', cd: 15, desc: '自身 7 秒减伤 65%' },
+      { k: 'E', name: '援护', cd: 24, desc: '全队 3 秒减伤 35%' },
+      { k: 'R', name: '冲锋', cd: 6, desc: '向面朝方向突进' },
+    ] },
+  { id: 'healer', name: '离经', short: '奶', color: '#5fd39a', rgb: '95,211,154',
+    hp: 170, speed: 172, dps: 9, home: [632, 430],
+    tagline: '全队的血条都归你管，倒一个就少一个输出',
+    duty: '注意被锁链缠住的队友，驱散能救他一命。',
+    skills: [
+      { k: 'Q', name: '单奶', cd: 2.4, desc: '治疗血量最低的队友' },
+      { k: 'E', name: '群疗', cd: 16, desc: '全队回复 18% 气血' },
+      { k: 'R', name: '驱散', cd: 8, desc: '解除队友身上的锁链' },
+    ] },
+  { id: 'melee', name: '傲血', short: '近战', color: '#ff6b5a', rgb: '255,107,90',
+    hp: 185, speed: 182, dps: 56, home: [368, 302],
+    tagline: '必须贴着首领打，一退就是零输出',
+    duty: '离首领太远就没有伤害，躲完机制要立刻贴回去。',
+    skills: [
+      { k: 'Q', name: '突进', cd: 5, desc: '向前突进，快速归位' },
+      { k: 'E', name: '减伤', cd: 11, desc: '自身 3 秒减伤 45%' },
+      { k: 'R', name: '爆发', cd: 22, desc: '8 秒内输出翻倍' },
+    ] },
+  { id: 'ranged', name: '惊羽', short: '远程', color: '#ffc861', rgb: '255,200,97',
+    hp: 175, speed: 176, dps: 52, home: [480, 506],
+    tagline: '拉开距离才有伤害，但躲机制时最难保持',
+    duty: '离首领太近伤害骤降，要站在外圈输出。',
+    skills: [
+      { k: 'Q', name: '后跃', cd: 5, desc: '向后跃开，拉开距离' },
+      { k: 'E', name: '减伤', cd: 11, desc: '自身 3 秒减伤 45%' },
+      { k: 'R', name: '爆发', cd: 22, desc: '8 秒内输出翻倍' },
+    ] },
+];
+
+/* ---------------------- 首领 ---------------------- */
+/* 首领与技能均取自《洛阳之战》真实机制文档（jx3box「魔盒」攻略），
+   为适配俯视简化操作做了判定上的裁剪：落点、范围、蓄力时间保留，
+   互动键类机制（拾剑、激活剑符）简化为站位与跑位。 */
+const BOSSES = [
+  {
+    name: '突利和顺', title: '苍狼啸野团统领', color: '#8fb4ff', rgb: '143,180,255', hp: 2600,
+    intro: '石棺沉浮。潜渊之刺点近战，倒悬之墨点远程。',
+    script: [
+      { at: 3.2, kind: 'line',   name: '潜渊之刺', dmg: 30, dur: 1.15, w: 86, target: ['melee'] },
+      { at: 7.8, kind: 'circle', name: '倒悬之墨', dmg: 26, dur: 1.0, r: 92, target: ['ranged', 'healer'] },
+      { at: 11.8, kind: 'ring',  name: '死水微澜', dmg: 32, dur: 1.75, r0: 152, r1: 640 },
+      { at: 16.4, kind: 'raid',  name: '玄溟之火', dmg: 22, dur: 1.5 },
+    ],
+    cycle: 21,
+  },
+  {
+    name: '田承嗣', title: '黑煞摧城团统领', color: '#ff8a5c', rgb: '255,138,92', hp: 3150,
+    intro: '电扫千军是正面 120°，千钧锤落要全员分担。',
+    script: [
+      { at: 3.0, kind: 'cone',  name: '电扫千军',   dmg: 34, dur: 1.0, half: 1.05 },
+      { at: 7.4, kind: 'line',  name: '枪林突刺',   dmg: 28, dur: 1.05, w: 76, multi: 3 },
+      { at: 11.8, kind: 'stack', name: '千钧锤落',  dmg: 40, dur: 1.45, r: 112 },
+      { at: 16.2, kind: 'cone', name: '断岳横斩',   dmg: 36, dur: 2.2, half: 1.52 },
+      { at: 19.6, kind: 'raid', name: '雷霆震岳',   dmg: 24, dur: 1.2 },
+    ],
+    cycle: 25,
+  },
+  {
+    name: '伊曼 · 寂夜 / 逐焰', title: '拜火燎原团统领', color: '#ff7fb0', rgb: '255,127,176', hp: 3450,
+    intro: '锁链横扫会定身，火雷一波接一波。被困住的人要人解。',
+    script: [
+      { at: 3.2, kind: 'line',   name: '链坠天崩', dmg: 30, dur: 1.05, w: 74 },
+      { at: 7.4, kind: 'chain',  name: '锁链横扫', dmg: 38, dur: 1.6, r: 120 },
+      { at: 11.8, kind: 'circle', name: '散雷延爆', dmg: 24, dur: 1.2, r: 82, multi: 3 },
+      { at: 16.2, kind: 'cone',  name: '焚天炽焰', dmg: 32, dur: 1.8, half: 1.52 },
+      { at: 19.8, kind: 'circle', name: '链舞火环', dmg: 26, dur: 1.15, r: 88, multi: 2 },
+    ],
+    cycle: 24,
+  },
+  {
+    name: '阿史那承庆', title: '狼牙军团总统领', color: '#c9a0ff', rgb: '201,160,255', hp: 3600,
+    intro: '凝渊刀是单体重击，黄泉斩连劈三刀。',
+    script: [
+      { at: 3.0, kind: 'tank',   name: '凝渊刀',   dmg: 64, dur: 1.35 },
+      { at: 7.4, kind: 'cone',   name: '黄泉斩',   dmg: 30, dur: 1.15, half: 1.05, multi: 3, seq: true, gap: 0.95 },
+      { at: 12.4, kind: 'mark',  name: '聚邪凝渊', dmg: 34, dur: 1.5 },
+      { at: 16.6, kind: 'circle', name: '邪魂散',  dmg: 26, dur: 1.2, r: 88, multi: 3 },
+    ],
+    cycle: 21,
+  },
+  {
+    name: '史朝义', title: '大燕皇帝', color: '#ffd24d', rgb: '255,210,77', hp: 4200,
+    intro: '煞域焚身，杀机必中。利刃挑最远的人，戾芒天坠铺满全场。',
+    script: [
+      { at: 3.0, kind: 'raid',   name: '煞域',     dmg: 24, dur: 1.3 },
+      { at: 7.4, kind: 'line',   name: '利刃',     dmg: 32, dur: 1.05, w: 78, target: ['ranged', 'healer'] },
+      { at: 11.8, kind: 'mark',  name: '杀机',     dmg: 42, dur: 1.5 },
+      { at: 16.0, kind: 'circle', name: '戾芒天坠', dmg: 24, dur: 1.25, r: 72, multi: 4 },
+      { at: 20.2, kind: 'cone',  name: '裂峰斩',   dmg: 36, dur: 1.6, half: 1.0 },
+    ],
+    cycle: 25,
+  },
+];
+
+/* ---------------------- 状态 ---------------------- */
+const game = {
+  scene: 'title', paused: false, touchMode: false,
+  sel: 0, time: 0,
+  units: [], player: null, boss: null,
+  mechs: [], queue: [], fx: [], floaters: [], banner: null,
+  bossIdx: 0, bossTime: 0, scriptIdx: 0,
+  shake: 0, flash: 0, flashColor: '190,20,30',
+  totalDamage: 0, deaths: 0, startedAt: 0,
+};
+
+/* ---------------------- 输入 ---------------------- */
+const keys = new Set();
+window.addEventListener('keydown', e => {
+  const k = e.key;
+  if (k === ' ' || k.startsWith('Arrow')) e.preventDefault();
+  if (e.repeat) return;
+  keys.add(k.toLowerCase());
+  audio();
+  handleKey(k);
+});
+window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+window.addEventListener('blur', () => keys.clear());
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && game.scene === 'playing') game.paused = true;
+});
+
+function handleKey(k) {
+  const kk = k.toLowerCase();
+  if (kk === 'm') { muted = !muted; return; }
+  if (game.scene === 'title') {
+    if (kk === 'arrowleft' || kk === 'a') game.sel = (game.sel + ROLES.length - 1) % ROLES.length;
+    else if (kk === 'arrowright' || kk === 'd') game.sel = (game.sel + 1) % ROLES.length;
+    else if (kk === 'enter' || kk === ' ') startRun(game.sel);
+    return;
+  }
+  if (game.scene === 'dead' || game.scene === 'win') {
+    if (kk === 'r' || kk === 'enter' || kk === ' ') { game.scene = 'title'; }
+    return;
+  }
+  if (kk === 'p' || kk === 'escape') { game.paused = !game.paused; return; }
+  if (game.paused) { game.paused = false; return; }
+  if (kk === 'q') useSkill(0);
+  if (kk === 'e') useSkill(1);
+  if (kk === 'r') useSkill(2);
+}
+
+function canvasPos(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+}
+
+/* 触屏：左摇杆 + 右下三个技能键 */
+const touch = { joyId: null, ox: 0, oy: 0, dx: 0, dy: 0, mag: 0, used: false };
+
+function startJoystick(id, pos) {
+  touch.joyId = id; touch.ox = pos.x; touch.oy = pos.y;
+  touch.dx = 0; touch.dy = 0; touch.mag = 0; touch.used = true;
+}
+function moveJoystick(pos) {
+  const dx = pos.x - touch.ox, dy = pos.y - touch.oy;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.001) { touch.mag = 0; return; }
+  touch.dx = dx / len; touch.dy = dy / len;
+  touch.mag = clamp(len / (58 * UIS), 0, 1);
+}
+function resetJoystick() { touch.joyId = null; touch.dx = 0; touch.dy = 0; touch.mag = 0; }
+
+/* 技能按钮几何（也用于点击判定） */
+function skillButtonRect(i) {
+  const S = UIS;
+  const w = 86 * S, h = 62 * S, gap = 10 * S;
+  const total = w * 3 + gap * 2;
+  const x0 = W - 26 * S - total;
+  const y0 = H - 24 * S - h;
+  return { x: x0 + i * (w + gap), y: y0, w, h };
+}
+
+function onPointerDown(e) {
+  if (rotateEl && rotateEl.classList.contains('show')) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  audio();
+  if (e.pointerType !== 'mouse' && !game.touchMode) { game.touchMode = true; syncRotate(); }
+
+  const pos = canvasPos(e);
+
+  if (game.scene === 'title') {
+    const i = roleCardAt(pos.x, pos.y);
+    if (i >= 0) game.sel = i;
+    startRun(game.sel);
+    return;
+  }
+  if (game.scene === 'dead' || game.scene === 'win') { game.scene = 'title'; return; }
+  if (game.paused) { game.paused = false; return; }
+
+  if (e.pointerType === 'mouse') {
+    // 鼠标：点技能栏放技能
+    for (let i = 0; i < 3; i++) {
+      const r = skillButtonRect(i);
+      if (pos.x >= r.x && pos.x <= r.x + r.w && pos.y >= r.y && pos.y <= r.y + r.h) { useSkill(i); return; }
+    }
+    return;
+  }
+
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  for (let i = 0; i < 3; i++) {
+    const r = skillButtonRect(i);
+    if (pos.x >= r.x && pos.x <= r.x + r.w && pos.y >= r.y && pos.y <= r.y + r.h) { useSkill(i); return; }
+  }
+  if (pos.x < W * 0.55) startJoystick(e.pointerId, pos);
+}
+
+window.addEventListener('pointerdown', onPointerDown);
+window.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') return;
+  if (e.pointerId !== touch.joyId) return;
+  e.preventDefault();
+  moveJoystick(canvasPos(e));
+});
+function endTouch(e) {
+  if (e.pointerId !== touch.joyId) return;
+  resetJoystick();
+  try { cv.releasePointerCapture(e.pointerId); } catch (err) {}
+}
+window.addEventListener('pointerup', endTouch);
+window.addEventListener('pointercancel', endTouch);
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ---------------------- 开局 ---------------------- */
+function makeUnit(role, isPlayer) {
+  return {
+    role, isPlayer: !!isPlayer,
+    x: role.home[0], y: role.home[1], r: 14,
+    homeX: role.home[0], homeY: role.home[1],
+    hp: role.hp, maxHp: role.hp, speed: role.speed,
+    drT: 0, drAmt: 0, boostT: 0, rootT: 0, chainT: 0,
+    cds: [0, 0, 0], facing: -Math.PI / 2,
+    dead: false, hitFlash: 0,
+  };
+}
+
+function startRun(roleIdx) {
+  game.sel = roleIdx;
+  game.units = ROLES.map((r, i) => makeUnit(r, i === roleIdx));
+  game.player = game.units[roleIdx];
+  game.scene = 'playing';
+  game.paused = false;
+  game.mechs = []; game.fx = []; game.floaters = [];
+  game.bossIdx = -1; game.bossTime = 0; game.scriptIdx = 0;
+  game.shake = 0; game.flash = 0;
+  game.totalDamage = 0; game.deaths = 0;
+  game.startedAt = game.time;
+  game.banner = { text: '洛 阳 之 战', sub: '五人小队 · 突入西门', t: 2.2, max: 2.2 };
+  nextBoss();
+}
+
+function nextBoss() {
+  game.bossIdx++;
+  if (game.bossIdx >= BOSSES.length) { winRun(); return; }
+  const b = BOSSES[game.bossIdx];
+  game.boss = {
+    def: b, name: b.name, title: b.title, color: b.color, rgb: b.rgb,
+    hp: b.hp, maxHp: b.hp, r: BOSS_HOME.r, x: BOSS_HOME.x, y: BOSS_HOME.y,
+    hitFlash: 0, dead: false, deathT: 0,
+  };
+  game.bossTime = 0;
+  game.scriptIdx = 0;
+  game.mechs = [];
+  game.queue = [];
+  game.banner = { text: b.name, sub: b.title + ' · ' + b.intro, t: 2.6, max: 2.6 };
+  for (const u of game.units) {
+    u.x = u.homeX; u.y = u.homeY;
+    u.drT = 0; u.boostT = 0; u.rootT = 0; u.chainT = 0;
+    if (!u.dead) u.hp = u.maxHp;   // 两场之间回满
+  }
+}
+
+/* ---------------------- 单位更新 ---------------------- */
+function aliveUnits() { return game.units.filter(u => !u.dead); }
+function tankUnit() {
+  const t = game.units.find(u => u.role.id === 'tank' && !u.dead);
+  return t || aliveUnits()[0] || null;
+}
+
+function unitDps(u) {
+  if (u.dead) return 0;
+  const role = u.role;
+  let d = role.dps;
+  const dd = dist(u.x, u.y, game.boss.x, game.boss.y);
+
+  if (role.id === 'melee') {
+    d = dd <= 158 ? role.dps : 0;
+  } else if (role.id === 'ranged') {
+    if (dd >= 250) d = role.dps;
+    else if (dd >= 150) d = role.dps * (0.4 + 0.6 * (dd - 150) / 100);
+    else d = role.dps * 0.4;
+  } else {
+    d = role.dps;
+  }
+  if (u.boostT > 0) d *= 2;
+  return d;
+}
+
+function distToBoss(u) { return dist(u.x, u.y, game.boss.x, game.boss.y); }
+
+function updatePlayerUnit(dt) {
+  const p = game.player;
+  if (!p || p.dead) return;
+
+  let dx = 0, dy = 0;
+  if (keys.has('a') || keys.has('arrowleft')) dx -= 1;
+  if (keys.has('d') || keys.has('arrowright')) dx += 1;
+  if (keys.has('w') || keys.has('arrowup')) dy -= 1;
+  if (keys.has('s') || keys.has('arrowdown')) dy += 1;
+  let mag = 1;
+  if (!dx && !dy && touch.joyId !== null && touch.mag > 0.14) {
+    dx = touch.dx; dy = touch.dy; mag = touch.mag;
+  }
+
+  if (p.rootT > 0) { dx = 0; dy = 0; }
+
+  const len = Math.hypot(dx, dy);
+  if (len > 0) {
+    dx /= len; dy /= len;
+    p.facing = Math.atan2(dy, dx);
+    p.x += dx * p.speed * mag * dt;
+    p.y += dy * p.speed * mag * dt;
+  }
+  clampUnit(p);
+}
+
+function clampUnit(u) {
+  u.x = clamp(u.x, ARENA.x + u.r, ARENA.x + ARENA.w - u.r);
+  u.y = clamp(u.y, ARENA.y + u.r, ARENA.y + ARENA.h - u.r);
+}
+
+/* ---------------------- AI ---------------------- */
+function isSafeAt(x, y, rad) {
+  for (const m of game.mechs) {
+    if (m.resolved) continue;
+    if (mechHits(m, x, y, rad)) return false;
+  }
+  return true;
+}
+
+function findSafeSpot(u) {
+  let best = null, bestD = 1e9;
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * TAU;
+    for (const r of [40, 80, 130, 190, 260]) {
+      const x = clamp(u.x + Math.cos(a) * r, ARENA.x + 18, ARENA.x + ARENA.w - 18);
+      const y = clamp(u.y + Math.sin(a) * r, ARENA.y + 18, ARENA.y + ARENA.h - 18);
+      if (!isSafeAt(x, y, u.r + 20)) continue;
+      const dd = dist(x, y, u.x, u.y);
+      if (dd < bestD) { bestD = dd; best = { x, y }; }
+    }
+  }
+  if (best) return best;
+  // 实在找不到就逃向场边
+  return { x: ARENA.x + ARENA.w / 2, y: ARENA.y + ARENA.h - 40 };
+}
+
+function updateAI(u, dt) {
+  if (u.dead) return;
+  if (u.rootT > 0) return;
+
+  let tx = u.homeX, ty = u.homeY;
+  let danger = !isSafeAt(u.x, u.y, u.r);
+
+  // 集合机制：优先往安全圈里走
+  let stackMech = null;
+  for (const m of game.mechs) {
+    if (!m.resolved && m.kind === 'stack') { stackMech = m; break; }
+  }
+
+  if (stackMech) {
+    tx = stackMech.x; ty = stackMech.y;
+    danger = false;
+  } else if (danger) {
+    const s = findSafeSpot(u);
+    tx = s.x; ty = s.y;
+  }
+
+  const d = dist(u.x, u.y, tx, ty);
+  if (d <= 3) return;
+
+  const sp = Math.min(u.speed * 1.06 * dt, d);
+  const nx = u.x + ((tx - u.x) / d) * sp;
+  const ny = u.y + ((ty - u.y) / d) * sp;
+
+  // 当前安全时，不允许自己走回危险区（躲开了就待着）
+  if (!danger && !stackMech && !isSafeAt(nx, ny, u.r)) return;
+
+  u.x = nx; u.y = ny;
+  u.facing = Math.atan2(ty - u.y, tx - u.x);
+  clampUnit(u);
+}
+
+/* ---------------------- 技能 ---------------------- */
+function useSkill(i) {
+  const u = game.player;
+  if (!u || u.dead || game.scene !== 'playing' || game.paused) return;
+  if (u.cds[i] > 0) return;
+
+  const role = u.role.id;
+  const sk = u.role.skills[i];
+  u.cds[i] = sk.cd;
+  SFX.skill();
+
+  if (role === 'tank') {
+    if (i === 0) { u.drT = 7; u.drAmt = 0.65; float('盾墙', u, '#9fc6ff'); }
+    else if (i === 1) { for (const a of aliveUnits()) { a.drT = Math.max(a.drT, 3); a.drAmt = Math.max(a.drAmt, 0.35); } float('援护', u, '#9fc6ff'); }
+    else dashUnit(u, u.facing, 190);
+  } else if (role === 'healer') {
+    if (i === 0) healLowest(0.30);
+    else if (i === 1) { for (const a of aliveUnits()) healUnit(a, a.maxHp * 0.18); float('群疗', u, '#8ff0bd'); }
+    else {
+      const t = aliveUnits().find(a => a.chainT > 0);
+      if (t) { t.chainT = 0; t.rootT = 0; float('驱散', t, '#8ff0bd'); }
+      else float('无异常', u, '#8ff0bd');
+    }
+  } else {
+    if (i === 0) {
+      const ang = role === 'ranged' ? u.facing + Math.PI : u.facing;
+      dashUnit(u, ang, 170);
+    } else if (i === 1) {
+      u.drT = 3; u.drAmt = 0.45; float('减伤', u, '#ffb0a0');
+    } else {
+      u.boostT = 8; float('爆发', u, '#ffd98a');
+    }
+  }
+}
+
+function dashUnit(u, ang, distv) {
+  const nx = clamp(u.x + Math.cos(ang) * distv, ARENA.x + u.r, ARENA.x + ARENA.w - u.r);
+  const ny = clamp(u.y + Math.sin(ang) * distv, ARENA.y + u.r, ARENA.y + ARENA.h - u.r);
+  for (let i = 0; i < 6; i++) {
+    game.fx.push({ x: u.x + rand(-6, 6), y: u.y + rand(-6, 6), vx: rand(-30, 30), vy: rand(-30, 30), life: 0.3, max: 0.3, color: u.role.rgb, size: rand(1.5, 3) });
+  }
+  u.x = nx; u.y = ny;
+}
+
+function healUnit(u, amount) {
+  if (u.dead) return;
+  const before = u.hp;
+  u.hp = Math.min(u.maxHp, u.hp + amount);
+  if (u.hp > before) {
+    game.floaters.push({ x: u.x, y: u.y - 24, text: '+' + Math.round(u.hp - before), color: '#7dffb0', size: 15, t: 0, life: 0.9 });
+  }
+}
+
+function healLowest(pct) {
+  let target = null, low = 1.1;
+  for (const u of aliveUnits()) {
+    const r = u.hp / u.maxHp;
+    if (r < low) { low = r; target = u; }
+  }
+  if (target) healUnit(target, target.maxHp * pct);
+}
+
+function float(text, u, color) {
+  game.floaters.push({ x: u.x, y: u.y - 34, text, color, size: 15, t: 0, life: 0.9 });
+}
+
+/* ---------------------- 伤害 ---------------------- */
+function dealDamage(u, amount, silent) {
+  if (GOD) return;
+  if (u.dead) return;
+  const dr = u.drT > 0 ? u.drAmt : 0;
+  const dmg = Math.max(0, amount * (1 - dr));
+  if (dmg <= 0) return;
+  u.hp -= dmg;
+
+  // 只有真正的"一击"才闪白和震屏；持续掉血（每帧结算）不参与，否则会一直抖
+  if (!silent) {
+    u.hitFlash = 0.25;
+    game.shake = Math.min(16, game.shake + (u.isPlayer ? 10 : 4));
+    game.floaters.push({
+      x: u.x + rand(-6, 6), y: u.y - 20,
+      text: '-' + Math.round(dmg), color: dr > 0 ? '#ffd0a0' : '#ff6a6a',
+      size: 16, t: 0, life: 0.9
+    });
+    SFX.hit();
+  }
+  if (u.hp <= 0) {
+    u.hp = 0; u.dead = true;
+    game.deaths++;
+    game.fx.push({ x: u.x, y: u.y, r: 30, t: 0, life: 0.6, color: '255,90,90', burst: true });
+    if (u.isPlayer) { loseRun(); }
+    else { SFX.down(); float('倒 下', u, '#ff8080'); }
+  }
+}
+
+function loseRun() {
+  game.scene = 'dead';
+  game.flash = 0.9; game.flashColor = '190,20,30';
+  game.banner = null;
+}
+
+function winRun() {
+  game.scene = 'win';
+  SFX.win();
+}
+
+/* ---------------------- 机制 ---------------------- */
+function mechHits(m, x, y, rad) {
+  switch (m.kind) {
+    case 'circle':
+      return dist(x, y, m.x, m.y) < m.r + rad;
+    case 'cone': {
+      const dd = dist(x, y, BOSS_HOME.x, BOSS_HOME.y);
+      if (dd > m.len) return false;
+      let a = Math.atan2(y - BOSS_HOME.y, x - BOSS_HOME.x) - m.ang;
+      a = Math.atan2(Math.sin(a), Math.cos(a));
+      return Math.abs(a) <= m.half;
+    }
+    case 'line': {
+      const rel = (x - BOSS_HOME.x) * Math.cos(m.ang) + (y - BOSS_HOME.y) * Math.sin(m.ang);
+      if (rel < 0) return false;
+      const perp = Math.abs(-(x - BOSS_HOME.x) * Math.sin(m.ang) + (y - BOSS_HOME.y) * Math.cos(m.ang));
+      return perp < m.w / 2 + rad;
+    }
+    case 'ring': {
+      const dd = dist(x, y, BOSS_HOME.x, BOSS_HOME.y);
+      return dd > m.r0 - rad && dd < m.r1;
+    }
+    case 'stack':
+      return dist(x, y, m.x, m.y) > m.r;
+    case 'mark':
+      return dist(x, y, m.x, m.y) < m.r + rad;
+    case 'tank':
+      return false;  // 单独结算
+    case 'chain':
+      return false;
+    case 'raid':
+      return false;   // 全场伤害，躲不掉
+  }
+  return false;
+}
+
+function pickRoleTarget(ids) {
+  const pool = game.units.filter(u => !u.dead && ids.includes(u.role.id));
+  if (pool.length) return pick(pool);
+  const al = aliveUnits();
+  return al.length ? pick(al) : null;
+}
+
+function later(delay, fn) { game.queue.push({ t: delay, fn }); }
+
+function specTarget(def, fallback) {
+  const spec = def.target || fallback;
+  return pickRoleTarget(spec);
+}
+
+function spawnMech(def) {
+  const multi = def.multi || 1;
+
+  if (def.kind === 'circle') {
+    for (let i = 0; i < multi; i++) {
+      const t = specTarget(def, ['melee', 'ranged', 'healer', 'tank']);
+      const mm = {
+        kind: 'circle', name: def.name, dmg: def.dmg, t: 0, dur: def.dur || 1.1,
+        r: def.r || 90, resolved: false,
+        x: t ? t.x + rand(-10, 10) : rand(ARENA.x + 120, ARENA.x + ARENA.w - 120),
+        y: t ? t.y + rand(-10, 10) : rand(ARENA.y + 120, ARENA.y + ARENA.h - 120),
+      };
+      mm.x = clamp(mm.x, ARENA.x + mm.r, ARENA.x + ARENA.w - mm.r);
+      mm.y = clamp(mm.y, ARENA.y + mm.r, ARENA.y + ARENA.h - mm.r);
+      game.mechs.push(mm);
+    }
+    SFX.cast();
+    return;
+  }
+
+  if (def.kind === 'line') {
+    const t = specTarget(def, ['melee', 'ranged', 'healer', 'tank']);
+    const base = t ? Math.atan2(t.y - BOSS_HOME.y, t.x - BOSS_HOME.x) : Math.PI / 2;
+    for (let i = 0; i < multi; i++) {
+      game.mechs.push({
+        kind: 'line', name: def.name, dmg: def.dmg, t: 0,
+        dur: def.dur || 1.05, resolved: false,
+        ang: multi > 1 ? base + (i * TAU) / multi : base,
+        w: def.w || 90
+      });
+    }
+    SFX.cast();
+    return;
+  }
+
+  if (def.kind === 'cone') {
+    const t = specTarget(def, ['tank', 'melee', 'ranged', 'healer']);
+    const base = t ? Math.atan2(t.y - BOSS_HOME.y, t.x - BOSS_HOME.x) : Math.PI / 2;
+    const pushCone = (ang) => {
+      game.mechs.push({
+        kind: 'cone', name: def.name, dmg: def.dmg, t: 0,
+        dur: def.dur || 1.15, resolved: false,
+        ang, half: def.half || 0.5, len: 1200
+      });
+    };
+    for (let i = 0; i < multi; i++) {
+      const ang = multi > 1 ? base + (i - (multi - 1) / 2) * 1.15 : base;
+      if (i === 0 || !def.seq) pushCone(ang);
+      else later(i * (def.gap || 0.9), (a => () => pushCone(a))(ang));
+    }
+    SFX.cast();
+    return;
+  }
+
+  const m = {
+    kind: def.kind, name: def.name, dmg: def.dmg, t: 0,
+    dur: def.dur || 1.1, resolved: false
+  };
+
+  if (def.kind === 'ring') {
+    m.r0 = def.r0; m.r1 = def.r1;
+  } else if (def.kind === 'stack') {
+    const p = game.player;
+    m.x = clamp(p.x + rand(-40, 40), ARENA.x + 130, ARENA.x + ARENA.w - 130);
+    m.y = clamp(p.y + rand(-40, 40), ARENA.y + 130, ARENA.y + ARENA.h - 130);
+    m.r = def.r || 105;
+  } else if (def.kind === 'mark') {
+    const t = specTarget(def, ['ranged', 'healer', 'melee']);
+    m.target = t; m.r = 78;
+    m.x = t ? t.x : BOSS_HOME.x;
+    m.y = t ? t.y : BOSS_HOME.y + 200;
+  } else if (def.kind === 'tank') {
+    m.target = tankUnit();
+    m.r = 70;
+    if (m.target) { m.x = m.target.x; m.y = m.target.y; }
+  } else if (def.kind === 'chain') {
+    m.target = specTarget(def, ['melee', 'ranged', 'healer']);
+    m.r = def.r || 120;
+  }
+
+  game.mechs.push(m);
+  SFX.cast();
+}
+
+function resolveMech(m) {
+  m.resolved = true;
+
+  if (m.kind === 'tank') {
+    const u = m.target;
+    if (u && !u.dead) {
+      dealDamage(u, m.dmg);
+      game.fx.push({ x: u.x, y: u.y, r: 46, t: 0, life: 0.5, color: '255,120,90', burst: true });
+      SFX.heavy();
+    }
+    return;
+  }
+
+  if (m.kind === 'chain') {
+    const u = m.target;
+    if (u && !u.dead) {
+      u.chainT = 3.6; u.rootT = 3.6;
+      dealDamage(u, 10);
+      float('锁 链', u, '#ff9ad0');
+    }
+    return;
+  }
+
+  if (m.kind === 'mark') {
+    for (const u of aliveUnits()) {
+      if (dist(u.x, u.y, m.x, m.y) < m.r + u.r) dealDamage(u, m.dmg);
+    }
+    game.fx.push({ x: m.x, y: m.y, r: m.r, t: 0, life: 0.5, color: '200,160,255', burst: true });
+    return;
+  }
+
+  if (m.kind === 'stack') {
+    for (const u of aliveUnits()) {
+      if (dist(u.x, u.y, m.x, m.y) > m.r) dealDamage(u, m.dmg);
+    }
+    game.fx.push({ x: m.x, y: m.y, r: m.r, t: 0, life: 0.5, color: '120,230,255', burst: true });
+    return;
+  }
+
+  if (m.kind === 'raid') {
+    for (const u of aliveUnits()) dealDamage(u, m.dmg);
+    game.fx.push({ x: BOSS_HOME.x, y: BOSS_HOME.y, r: 200, t: 0, life: 0.55, color: '255,90,70', burst: true });
+    return;
+  }
+
+  for (const u of aliveUnits()) {
+    if (mechHits(m, u.x, u.y, u.r)) dealDamage(u, m.dmg);
+  }
+  game.fx.push({ x: m.x || BOSS_HOME.x, y: m.y || BOSS_HOME.y, r: 44, t: 0, life: 0.45, color: '255,110,90', burst: true });
+}
+
+/* ---------------------- 主更新 ---------------------- */
+function update(dt) {
+  game.time += dt;
+  game.shake = Math.max(0, game.shake - dt * 60);
+  game.flash = Math.max(0, game.flash - dt * 1.6);
+
+  for (const f of game.fx) { f.t += dt; if (f.burst) f.r += dt * 90; else { f.x += (f.vx || 0) * dt; f.y += (f.vy || 0) * dt; } }
+  game.fx = game.fx.filter(f => f.t < f.life);
+  for (const f of game.floaters) { f.t += dt; f.y -= 30 * dt; }
+  game.floaters = game.floaters.filter(f => f.t < f.life);
+  if (game.banner) { game.banner.t -= dt; if (game.banner.t <= 0) game.banner = null; }
+
+  if (game.scene !== 'playing' || game.paused) return;
+
+  // 单位状态
+  for (const u of game.units) {
+    if (u.dead) continue;
+    u.drT = Math.max(0, u.drT - dt);
+    u.boostT = Math.max(0, u.boostT - dt);
+    u.rootT = Math.max(0, u.rootT - dt);
+    u.hitFlash = Math.max(0, u.hitFlash - dt);
+    for (let i = 0; i < 3; i++) u.cds[i] = Math.max(0, u.cds[i] - dt);
+    if (u.chainT > 0) {
+      u.chainT -= dt;
+      dealDamage(u, 7 * dt, true);
+      if (u.hp <= 0) continue;
+    }
+  }
+
+  if (game.boss.dead) {
+    game.boss.deathT -= dt;
+    if (game.boss.deathT <= 0) nextBoss();
+    return;
+  }
+
+  updatePlayerUnit(dt);
+  for (const u of game.units) if (!u.isPlayer) updateAI(u, dt);
+
+  // AI 补位技能
+  aiSkills(dt);
+
+  // 首领普攻：持续压 T 的血
+  const t = tankUnit();
+  if (t && !t.dead) dealDamage(t, 9 * dt, true);
+
+  // 首领时间轴
+  game.bossTime += dt;
+  const def = game.boss.def;
+  while (game.scriptIdx < def.script.length && game.bossTime >= def.script[game.scriptIdx].at) {
+    spawnMech(def.script[game.scriptIdx]);
+    game.scriptIdx++;
+  }
+  if (game.scriptIdx >= def.script.length && game.bossTime >= def.cycle) {
+    game.bossTime -= def.cycle;
+    game.scriptIdx = 0;
+  }
+
+  // 延迟释放队列（多段斩之类）
+  for (const q of game.queue) q.t -= dt;
+  const ready = game.queue.filter(q => q.t <= 0);
+  game.queue = game.queue.filter(q => q.t > 0);
+  for (const q of ready) q.fn();
+
+  // 机制推进
+  for (const m of game.mechs) {
+    m.t += dt;
+    if (m.kind === 'mark' && m.target && !m.target.dead && m.t < m.dur * 0.75) {
+      m.x = m.target.x; m.y = m.target.y;
+    }
+    if (m.kind === 'tank' && m.target && !m.target.dead) {
+      m.x = m.target.x; m.y = m.target.y;
+    }
+    if (!m.resolved && m.t >= m.dur) resolveMech(m);
+  }
+  game.mechs = game.mechs.filter(m => !m.resolved || m.t < m.dur + 0.35);
+
+  // 首领掉血
+  let dps = 0;
+  for (const u of aliveUnits()) dps += unitDps(u);
+  const dmg = dps * dt;
+  game.boss.hp = Math.max(0, game.boss.hp - dmg);
+  game.totalDamage += dmg;
+  game.boss.hitFlash = Math.max(0, game.boss.hitFlash - dt * 3);
+
+  if (game.boss.hp <= 0) {
+    game.boss.dead = true;
+    game.boss.deathT = 1.6;
+    game.banner = { text: '击 破', sub: game.boss.name, t: 1.6, max: 1.6 };
+    SFX.kill();
+    game.mechs = [];
+  }
+}
+
+function aiSkills(dt) {
+  for (const u of game.units) {
+    if (u.isPlayer || u.dead) continue;
+
+    if (u.role.id === 'healer') {
+      // 单奶：有人低于 78%
+      if (u.cds[0] <= 0) {
+        let low = null, r0 = 1.1;
+        for (const a of aliveUnits()) { const r = a.hp / a.maxHp; if (r < r0) { r0 = r; low = a; } }
+        if (low && r0 < 0.78) { u.cds[0] = u.role.skills[0].cd; healUnit(low, low.maxHp * 0.30); }
+      }
+      // 群疗：两人以上低于 55%
+      if (u.cds[1] <= 0) {
+        const hurt = aliveUnits().filter(a => a.hp / a.maxHp < 0.55).length;
+        if (hurt >= 2) { u.cds[1] = u.role.skills[1].cd; for (const a of aliveUnits()) healUnit(a, a.maxHp * 0.18); }
+      }
+      // 驱散
+      if (u.cds[2] <= 0) {
+        const c = aliveUnits().find(a => a.chainT > 0);
+        if (c) { u.cds[2] = u.role.skills[2].cd; c.chainT = 0; c.rootT = 0; float('驱散', c, '#8ff0bd'); }
+      }
+    } else if (u.role.id === 'tank') {
+      // 有 tank 机制读条快结束 → 开盾墙
+      if (u.cds[0] <= 0) {
+        const danger = game.mechs.find(m => m.kind === 'tank' && m.target === u && !m.resolved && m.dur - m.t < 0.5);
+        if (danger) { u.cds[0] = u.role.skills[0].cd; u.drT = 7; u.drAmt = 0.65; }
+      }
+    }
+  }
+}
+
+/* ---------------------- 绘制工具 ---------------------- */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+function txt(str, x, y, size, color, align) {
+  ctx.font = size + 'px ' + FONT;
+  ctx.fillStyle = color;
+  ctx.textAlign = align || 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(str, x, y);
+}
+function glowTxt(str, x, y, size, color, blur, align) {
+  ctx.save();
+  ctx.shadowColor = color; ctx.shadowBlur = blur;
+  txt(str, x, y, size, color, align);
+  ctx.restore();
+}
+
+let bgGrad = null, vignette = null;
+function drawBackground() {
+  if (!bgGrad) {
+    bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0, '#0b0810');
+    bgGrad.addColorStop(0.5, '#141019');
+    bgGrad.addColorStop(1, '#07060b');
+    vignette = ctx.createRadialGradient(W / 2, H / 2, 150, W / 2, H / 2, 660);
+    vignette.addColorStop(0, 'rgba(120,80,60,0.10)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.62)');
+  }
+  ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+}
+
+function drawArena() {
+  rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18);
+  ctx.fillStyle = 'rgba(36,29,42,0.95)'; ctx.fill();
+
+  ctx.save();
+  rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(200,175,150,0.05)';
+  ctx.lineWidth = 1;
+  for (let x = ARENA.x; x <= ARENA.x + ARENA.w; x += 44) {
+    ctx.beginPath(); ctx.moveTo(x, ARENA.y); ctx.lineTo(x, ARENA.y + ARENA.h); ctx.stroke();
+  }
+  for (let y = ARENA.y; y <= ARENA.y + ARENA.h; y += 44) {
+    ctx.beginPath(); ctx.moveTo(ARENA.x, y); ctx.lineTo(ARENA.x + ARENA.w, y); ctx.stroke();
+  }
+  ctx.restore();
+
+  rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18);
+  ctx.strokeStyle = 'rgba(205,175,125,0.24)';
+  ctx.lineWidth = 2; ctx.stroke();
+}
+
+function drawBoss() {
+  const b = game.boss;
+  if (!b) return;
+  const t = game.time;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 3);
+  const alpha = b.dead ? Math.max(0, b.deathT / 1.6) : 1;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(b.x, b.y);
+
+  const grd = ctx.createRadialGradient(0, 0, 10, 0, 0, 130);
+  grd.addColorStop(0, 'rgba(' + b.rgb + ',0.26)');
+  grd.addColorStop(1, 'rgba(' + b.rgb + ',0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(0, 0, 130, 0, TAU); ctx.fill();
+
+  ctx.save();
+  ctx.rotate(t * 0.25);
+  for (let i = 0; i < 16; i++) {
+    ctx.rotate(TAU / 16);
+    ctx.beginPath();
+    ctx.moveTo(b.r + 12, 0);
+    ctx.lineTo(b.r + 20, 0);
+    ctx.strokeStyle = 'rgba(' + b.rgb + ',' + (0.12 + 0.22 * pulse) + ')';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.beginPath(); ctx.arc(0, 0, b.r, 0, TAU);
+  ctx.fillStyle = b.hitFlash > 0 ? 'rgba(255,230,220,0.85)' : '#150e16';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(' + b.rgb + ',0.9)';
+  ctx.stroke();
+
+  ctx.beginPath(); ctx.arc(0, 0, b.r * 0.42, 0, TAU);
+  ctx.fillStyle = 'rgba(' + b.rgb + ',0.35)';
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(' + b.rgb + ',' + (0.6 + 0.4 * pulse) + ')';
+  ctx.beginPath(); ctx.ellipse(-15, -8, 8, 3.2, -0.16, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(15, -8, 8, 3.2, 0.16, 0, TAU); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawMechanics() {
+  const t = game.time;
+  for (const m of game.mechs) {
+    const prog = clamp(m.t / m.dur, 0, 1);
+    const fade = m.resolved ? Math.max(0, 1 - (m.t - m.dur) / 0.35) : 1;
+    if (fade <= 0) continue;
+
+    ctx.save();
+    ctx.globalAlpha = fade;
+
+    if (m.kind === 'circle') {
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU);
+      ctx.fillStyle = 'rgba(255,80,80,0.10)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,90,90,0.75)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r * prog, 0, TAU);
+      ctx.fillStyle = 'rgba(255,80,80,0.30)'; ctx.fill();
+      ring(m.x, m.y, m.r + 8, prog, '255,130,120');
+      txt('出去', m.x, m.y - m.r * 0.5, 14, 'rgba(255,215,215,0.9)');
+    }
+
+    else if (m.kind === 'cone') {
+      ctx.save();
+      rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18); ctx.clip();
+      ctx.beginPath();
+      ctx.moveTo(BOSS_HOME.x, BOSS_HOME.y);
+      ctx.arc(BOSS_HOME.x, BOSS_HOME.y, m.len, m.ang - m.half, m.ang + m.half);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,70,70,0.11)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,110,100,0.75)'; ctx.lineWidth = 2; ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(BOSS_HOME.x, BOSS_HOME.y);
+      ctx.arc(BOSS_HOME.x, BOSS_HOME.y, 900 * prog, m.ang - m.half, m.ang + m.half);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255,70,70,0.26)'; ctx.fill();
+      ctx.restore();
+      ring(BOSS_HOME.x, BOSS_HOME.y, BOSS_HOME.r + 16, prog, '255,140,120');
+    }
+
+    else if (m.kind === 'line') {
+      ctx.save();
+      rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18); ctx.clip();
+      ctx.translate(BOSS_HOME.x, BOSS_HOME.y);
+      ctx.rotate(m.ang);
+      ctx.fillStyle = 'rgba(255,90,70,0.13)';
+      ctx.fillRect(0, -m.w / 2, 1300, m.w);
+      ctx.fillStyle = 'rgba(255,90,70,' + (0.10 + 0.22 * prog) + ')';
+      ctx.fillRect(0, -m.w / 2, 1300, m.w);
+      ctx.strokeStyle = 'rgba(255,130,110,0.8)'; ctx.lineWidth = 2;
+      ctx.strokeRect(0, -m.w / 2, 1300, m.w);
+      ctx.restore();
+      ring(BOSS_HOME.x, BOSS_HOME.y, BOSS_HOME.r + 16, prog, '255,160,120');
+    }
+
+    else if (m.kind === 'ring') {
+      ctx.save();
+      rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18); ctx.clip();
+      ctx.beginPath();
+      ctx.arc(BOSS_HOME.x, BOSS_HOME.y, m.r1, 0, TAU);
+      ctx.arc(BOSS_HOME.x, BOSS_HOME.y, m.r0, 0, TAU, true);
+      ctx.fillStyle = 'rgba(255,80,80,' + (0.08 + 0.10 * prog) + ')';
+      ctx.fill();
+      ctx.beginPath(); ctx.arc(BOSS_HOME.x, BOSS_HOME.y, m.r0, 0, TAU);
+      ctx.strokeStyle = 'rgba(140,230,255,0.85)'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(BOSS_HOME.x, BOSS_HOME.y, m.r0 * 0.55, 0, TAU);
+      ctx.strokeStyle = 'rgba(140,230,255,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.restore();
+      txt('中间安全', BOSS_HOME.x, BOSS_HOME.y + m.r0 * 0.5, 13, 'rgba(200,245,255,0.85)');
+      ring(BOSS_HOME.x, BOSS_HOME.y, BOSS_HOME.r + 16, prog, '255,140,120');
+    }
+
+    else if (m.kind === 'stack') {
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU);
+      ctx.fillStyle = 'rgba(90,220,255,0.12)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(120,230,255,0.9)'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r * prog, 0, TAU);
+      ctx.fillStyle = 'rgba(90,220,255,0.25)'; ctx.fill();
+      ring(m.x, m.y, m.r + 8, prog, '120,230,255');
+      txt('进来', m.x, m.y, 16, 'rgba(210,250,255,0.95)');
+    }
+
+    else if (m.kind === 'mark') {
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU);
+      ctx.fillStyle = 'rgba(200,150,255,0.14)'; ctx.fill();
+      ctx.save();
+      ctx.setLineDash([10, 8]);
+      ctx.strokeStyle = 'rgba(210,160,255,0.95)'; ctx.lineWidth = 2.4; ctx.stroke();
+      ctx.restore();
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r * prog, 0, TAU);
+      ctx.fillStyle = 'rgba(200,150,255,0.28)'; ctx.fill();
+      ring(m.x, m.y, m.r + 8, prog, '210,170,255');
+      txt('快跑', m.x, m.y - m.r * 0.5, 14, 'rgba(240,220,255,0.9)');
+    }
+
+    else if (m.kind === 'tank') {
+      const u = m.target;
+      if (u && !u.dead) {
+        ctx.beginPath(); ctx.arc(u.x, u.y, m.r, 0, TAU);
+        ctx.fillStyle = 'rgba(255,60,60,0.16)'; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,80,80,0.95)'; ctx.lineWidth = 3; ctx.stroke();
+        ctx.beginPath(); ctx.arc(u.x, u.y, m.r * prog, 0, TAU);
+        ctx.fillStyle = 'rgba(255,60,60,0.28)'; ctx.fill();
+        ring(u.x, u.y, m.r + 8, prog, '255,120,120');
+        if (u.isPlayer) {
+          txt('开 减 伤', u.x, u.y + m.r + 22, 17, u.drT > 0 ? '#9fe8ff' : '#ff9a9a');
+        }
+      }
+    }
+
+    else if (m.kind === 'chain') {
+      const u = m.target;
+      if (u) {
+        const bx = BOSS_HOME.x, by = BOSS_HOME.y;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(u.x, u.y);
+        ctx.strokeStyle = 'rgba(255,120,200,' + (0.3 + 0.5 * prog) + ')';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([12, 8]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(u.x, u.y, 26 + 6 * Math.sin(t * 12), 0, TAU);
+        ctx.strokeStyle = 'rgba(255,120,200,0.9)'; ctx.lineWidth = 2; ctx.stroke();
+        if (prog > 0.6) txt('需 驱 散', u.x, u.y + 40, 14, 'rgba(255,180,220,0.95)');
+      }
+    }
+
+    else if (m.kind === 'raid') {
+      ctx.save();
+      rr(ARENA.x, ARENA.y, ARENA.w, ARENA.h, 18);
+      ctx.clip();
+      ctx.fillStyle = 'rgba(255,70,60,' + (0.05 + 0.20 * prog) + ')';
+      ctx.fillRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+      ctx.restore();
+      ring(BOSS_HOME.x, BOSS_HOME.y, BOSS_HOME.r + 16, prog, '255,120,100');
+      txt('全 场 · ' + m.name, BOSS_HOME.x, ARENA.y + 26, 15, 'rgba(255,190,180,0.95)');
+    }
+
+    ctx.restore();
+  }
+}
+
+function ring(x, y, r, prog, rgb) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, TAU);
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+  ctx.lineWidth = 3; ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + TAU * prog);
+  ctx.strokeStyle = 'rgb(' + rgb + ')';
+  ctx.lineWidth = 3; ctx.stroke();
+}
+
+function drawUnits() {
+  for (const u of game.units) {
+    if (u.dead) continue;
+    const role = u.role;
+    ctx.save();
+    ctx.translate(u.x, u.y);
+
+    ctx.beginPath();
+    ctx.ellipse(0, u.r * 0.9, u.r * 0.9, u.r * 0.38, 0, 0, TAU);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fill();
+
+    if (u.drT > 0) {
+      ctx.beginPath(); ctx.arc(0, 0, u.r + 10, 0, TAU);
+      ctx.strokeStyle = 'rgba(150,200,255,' + (0.35 + 0.3 * Math.sin(game.time * 12)) + ')';
+      ctx.lineWidth = 3; ctx.stroke();
+    }
+    if (u.boostT > 0) {
+      ctx.beginPath(); ctx.arc(0, 0, u.r + 8, 0, TAU);
+      ctx.strokeStyle = 'rgba(255,215,140,0.55)';
+      ctx.lineWidth = 2.5; ctx.stroke();
+    }
+
+    const grd = ctx.createRadialGradient(0, 0, 2, 0, 0, 38);
+    grd.addColorStop(0, 'rgba(' + role.rgb + ',0.45)');
+    grd.addColorStop(1, 'rgba(' + role.rgb + ',0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(0, 0, 38, 0, TAU); ctx.fill();
+
+    ctx.beginPath(); ctx.arc(0, 0, u.r, 0, TAU);
+    ctx.fillStyle = u.hitFlash > 0 ? 'rgba(255,235,230,0.9)' : '#0e0b14';
+    ctx.fill();
+    ctx.lineWidth = u.isPlayer ? 3.2 : 2.2;
+    ctx.strokeStyle = role.color;
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(0, 0, u.r * 0.4, 0, TAU);
+    ctx.fillStyle = 'rgba(' + role.rgb + ',0.9)'; ctx.fill();
+
+    if (u.isPlayer) {
+      const fa = u.facing;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(fa) * (u.r + 11), Math.sin(fa) * (u.r + 11));
+      ctx.lineTo(Math.cos(fa + 2.6) * (u.r + 2), Math.sin(fa + 2.6) * (u.r + 2));
+      ctx.lineTo(Math.cos(fa - 2.6) * (u.r + 2), Math.sin(fa - 2.6) * (u.r + 2));
+      ctx.closePath();
+      ctx.fillStyle = '#fff'; ctx.fill();
+    }
+
+    // 定身
+    if (u.rootT > 0) {
+      ctx.beginPath(); ctx.arc(0, 0, u.r + 6, 0, TAU);
+      ctx.strokeStyle = 'rgba(255,120,200,0.85)';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+
+    // 头顶名字与血条
+    const bw = 44, bh = 5;
+    const bx = u.x - bw / 2, by = u.y - u.r - 20;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bx, by, bw, bh);
+    const ratio = clamp(u.hp / u.maxHp, 0, 1);
+    ctx.fillStyle = ratio > 0.35 ? 'rgba(' + role.rgb + ',0.95)' : '#ff4d4d';
+    ctx.fillRect(bx, by, bw * ratio, bh);
+    txt(role.short + (u.isPlayer ? ' 你' : ''), u.x, by - 8, 11, u.isPlayer ? '#fff' : 'rgba(220,210,195,0.75)');
+  }
+}
+
+function drawFx() {
+  for (const f of game.fx) {
+    const k = f.t / f.life;
+    if (f.burst) {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, TAU);
+      ctx.strokeStyle = 'rgba(' + f.color + ',' + (1 - k) * 0.9 + ')';
+      ctx.lineWidth = 4 * (1 - k) + 0.6;
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.size, 0, TAU);
+      ctx.fillStyle = 'rgba(' + f.color + ',' + (1 - k) + ')';
+      ctx.fill();
+    }
+  }
+  for (const f of game.floaters) {
+    const k = f.t / f.life;
+    ctx.save();
+    ctx.globalAlpha = k > 0.7 ? (1 - k) / 0.3 : 1;
+    ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur = 5;
+    txt(f.text, f.x, f.y, f.size, f.color);
+    ctx.restore();
+  }
+}
+
+/* ---------------------- HUD ---------------------- */
+function drawHUD() {
+  const S = UIS;
+  const b = game.boss;
+
+  if (b) {
+    const bw = 520 * Math.min(S, 1.3), bh = 12 * Math.min(S, 1.3);
+    const bx = W / 2 - bw / 2, by = 26;
+    txt(b.name, W / 2, 14, 13, 'rgba(235,220,195,0.85)');
+    rr(bx, by, bw, bh, 6);
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
+    ctx.save();
+    rr(bx, by, bw, bh, 6); ctx.clip();
+    ctx.fillStyle = 'rgba(' + b.rgb + ',0.9)';
+    ctx.fillRect(bx, by, bw * clamp(b.hp / b.maxHp, 0, 1), bh);
+    ctx.restore();
+    rr(bx, by, bw, bh, 6);
+    ctx.strokeStyle = 'rgba(220,190,150,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    txt(Math.ceil(b.hp) + ' / ' + b.maxHp, W / 2, by + bh / 2, 10 * Math.min(S, 1.3), 'rgba(255,245,230,0.9)');
+  }
+
+  // 队伍框
+  const px = 20, py = 20, pw = 168 * Math.min(S, 1.15), ph = 30 * Math.min(S, 1.15);
+  for (let i = 0; i < game.units.length; i++) {
+    const u = game.units[i];
+    const y = py + i * (ph + 5);
+    rr(px, y, pw, ph, 6);
+    ctx.fillStyle = u.dead ? 'rgba(40,20,24,0.75)' : 'rgba(14,12,20,0.8)';
+    ctx.fill();
+    ctx.strokeStyle = u.isPlayer ? 'rgba(255,235,200,0.5)' : 'rgba(200,175,140,0.14)';
+    ctx.lineWidth = 1; ctx.stroke();
+
+    ctx.fillStyle = u.dead ? 'rgba(120,80,80,0.8)' : u.role.color;
+    ctx.fillRect(px + 5, y + 6, 5, ph - 12);
+
+    txt(u.role.name, px + 16, y + ph / 2, 12 * Math.min(S, 1.15), u.dead ? 'rgba(150,120,120,0.7)' : 'rgba(235,222,200,0.9)', 'left');
+
+    const hbw = pw - 58, hbx = px + 52, hby = y + ph / 2 - 4;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(hbx, hby, hbw, 8);
+    const rr2 = clamp(u.hp / u.maxHp, 0, 1);
+    ctx.fillStyle = u.dead ? '#4a2a2a' : (rr2 > 0.35 ? 'rgba(' + u.role.rgb + ',0.95)' : '#ff4d4d');
+    ctx.fillRect(hbx, hby, hbw * rr2, 8);
+  }
+
+  drawSkillBar(S);
+  drawTimeline(S);
+
+  // 状态提示
+  const p = game.player;
+  if (p && !p.dead) {
+    const role = p.role.id;
+    let hint = '';
+    if (role === 'melee') {
+      const dd = dist(p.x, p.y, b.x, b.y);
+      if (dd > 158) hint = '超出近战范围 · 输出为 0';
+    } else if (role === 'ranged') {
+      const dd = dist(p.x, p.y, b.x, b.y);
+      if (dd < 150) hint = '距离太近 · 输出降低';
+    }
+    if (hint) txt(hint, W / 2, H - 96, 13 * Math.min(S, 1.2), 'rgba(255,150,140,0.9)');
+  }
+}
+
+function drawSkillBar(S) {
+  const u = game.player;
+  if (!u) return;
+  for (let i = 0; i < 3; i++) {
+    const r = skillButtonRect(i);
+    const sk = u.role.skills[i];
+    const cd = u.cds[i];
+    const ready = cd <= 0 && !u.dead;
+
+    rr(r.x, r.y, r.w, r.h, 8);
+    ctx.fillStyle = ready ? 'rgba(' + u.role.rgb + ',0.16)' : 'rgba(20,18,26,0.8)';
+    ctx.fill();
+    ctx.strokeStyle = ready ? 'rgba(' + u.role.rgb + ',0.75)' : 'rgba(180,170,160,0.18)';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    txt(sk.k, r.x + 12, r.y + 12, 11 * Math.min(S, 1.3), 'rgba(235,225,205,0.65)', 'left');
+    txt(sk.name, r.x + r.w / 2, r.y + r.h * 0.42, 15 * Math.min(S, 1.25), ready ? 'rgba(255,245,230,0.95)' : 'rgba(200,195,190,0.4)');
+
+    if (cd > 0) {
+      const k = clamp(cd / sk.cd, 0, 1);
+      ctx.save();
+      rr(r.x, r.y, r.w, r.h, 8); ctx.clip();
+      ctx.fillStyle = 'rgba(8,6,12,0.72)';
+      ctx.fillRect(r.x, r.y, r.w, r.h * k);
+      ctx.restore();
+      txt(cd.toFixed(1), r.x + r.w / 2, r.y + r.h * 0.74, 13 * Math.min(S, 1.2), 'rgba(230,220,200,0.8)');
+    } else {
+      txt(sk.desc, r.x + r.w / 2, r.y + r.h * 0.74, 9.5 * Math.min(S, 1.2), 'rgba(215,205,190,0.5)');
+    }
+  }
+}
+
+function drawTimeline(S) {
+  const b = game.boss;
+  if (!b || b.dead) return;
+  const def = b.def;
+  let next = [];
+  for (let i = game.scriptIdx; i < def.script.length && next.length < 3; i++) {
+    next.push({ name: def.script[i].name, in: def.script[i].at - game.bossTime });
+  }
+  if (next.length < 3) {
+    const left = def.cycle - game.bossTime;
+    for (let i = 0; i < def.script.length && next.length < 3; i++) {
+      next.push({ name: def.script[i].name, in: left + def.script[i].at });
+    }
+  }
+  const x = W - 24, y0 = 118;
+  for (let i = 0; i < next.length; i++) {
+    const y = y0 + i * 42 * Math.min(S, 1.2);
+    const a = 1 - i * 0.28;
+    txt(next[i].name, x, y, 12.5 * Math.min(S, 1.2), 'rgba(240,225,200,' + a * 0.85 + ')', 'right');
+    const sec = Math.max(0, next[i].in);
+    txt(sec.toFixed(1) + 's', x, y + 15, 11 * Math.min(S, 1.2), 'rgba(255,180,120,' + a * 0.7 + ')', 'right');
+  }
+}
+
+/* ---------------------- 标题页 ---------------------- */
+const CARD = { w: 200, h: 96, gap: 20, y: 198 };
+function roleCardRects() {
+  const total = ROLES.length * CARD.w + (ROLES.length - 1) * CARD.gap;
+  const x0 = (W - total) / 2;
+  return ROLES.map((r, i) => ({ x: x0 + i * (CARD.w + CARD.gap), y: CARD.y, w: CARD.w, h: CARD.h }));
+}
+function roleCardAt(mx, my) {
+  const rs = roleCardRects();
+  for (let i = 0; i < rs.length; i++) {
+    const r = rs[i];
+    if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) return i;
+  }
+  return -1;
+}
+
+function drawTitle() {
+  const g1 = ctx.createRadialGradient(W / 2, 110, 20, W / 2, 110, 460);
+  g1.addColorStop(0, 'rgba(200,110,70,0.18)');
+  g1.addColorStop(1, 'rgba(200,110,70,0)');
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, W, 460);
+
+  glowTxt('洛 阳 之 战', W / 2, 84, 54, '#f6e6c4', 26);
+  txt('苍生铸世 · 团队秘境 · 定位演武', W / 2, 126, 15, 'rgba(225,200,170,0.55)');
+  txt('选一个定位，站好你的位置', W / 2, 152, 13, 'rgba(200,180,150,0.35)');
+
+  const rs = roleCardRects();
+  for (let i = 0; i < ROLES.length; i++) {
+    const r = ROLES[i], rc = rs[i];
+    const sel = i === game.sel;
+
+    if (sel) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(' + r.rgb + ',0.75)';
+      ctx.shadowBlur = 22;
+      rr(rc.x, rc.y, rc.w, rc.h, 12);
+      ctx.fillStyle = 'rgba(20,16,28,0.98)';
+      ctx.fill();
+      ctx.restore();
+    }
+    rr(rc.x, rc.y, rc.w, rc.h, 12);
+    ctx.fillStyle = sel ? 'rgba(20,16,28,0.98)' : 'rgba(15,12,22,0.75)';
+    ctx.fill();
+    ctx.lineWidth = sel ? 2 : 1;
+    ctx.strokeStyle = sel ? r.color : 'rgba(200,175,130,0.14)';
+    ctx.stroke();
+
+    txt(r.name, rc.x + rc.w / 2, rc.y + 34, 26, sel ? r.color : 'rgba(225,215,200,0.62)');
+    txt(r.short + ' · 气血 ' + r.hp, rc.x + rc.w / 2, rc.y + 62, 11.5 * Math.min(TITLE_TS, 1.2), 'rgba(210,195,170,0.55)');
+    txt('输出 ' + r.dps + '/秒', rc.x + rc.w / 2, rc.y + 80, 11.5 * Math.min(TITLE_TS, 1.2), 'rgba(210,195,170,0.45)');
+  }
+
+  const cur = ROLES[game.sel];
+  const dx = 120, dy = 318, dw = W - 240, dh = 150;
+  rr(dx, dy, dw, dh, 12);
+  ctx.fillStyle = 'rgba(15,12,23,0.82)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(' + cur.rgb + ',0.42)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  txt(cur.tagline, dx + 26, dy + 30, 15 * Math.min(TITLE_TS, 1.15), 'rgba(' + cur.rgb + ',0.95)', 'left');
+  txt(cur.duty, dx + 26, dy + 54, 12.5 * Math.min(TITLE_TS, 1.15), 'rgba(205,190,168,0.62)', 'left');
+
+  for (let i = 0; i < 3; i++) {
+    const sk = cur.skills[i];
+    const sx = dx + 26 + i * 232;
+    txt('[' + sk.k + '] ' + sk.name, sx, dy + 92, 13 * Math.min(TITLE_TS, 1.15), 'rgba(240,230,210,0.9)', 'left');
+    txt(sk.desc, sx, dy + 112, 11 * Math.min(TITLE_TS, 1.1), 'rgba(200,190,170,0.55)', 'left');
+  }
+
+  txt(game.touchMode ? '点 击 定 位 卡 片 入 本' : '← →  切换定位      回车 / 空格  入本',
+    W / 2, 508, 15 * TITLE_TS, 'rgba(235,220,195,0.72)');
+
+  // 首领顺序
+  txt('— 首 领 —', W / 2, 546, 12 * TITLE_TS, 'rgba(200,185,160,0.4)');
+  const names = BOSSES.map(b => b.name).join('   ·   ');
+  txt(names, W / 2, 570, 12 * Math.min(TITLE_TS, 1.1), 'rgba(215,200,180,0.55)');
+}
+
+/* ---------------------- 结算 ---------------------- */
+function drawEnd() {
+  const win = game.scene === 'win';
+  ctx.fillStyle = 'rgba(6,4,9,0.82)';
+  ctx.fillRect(0, 0, W, H);
+
+  glowTxt(win ? '洛 阳 已 破' : '团 灭', W / 2, 180, 46, win ? '#ffd98a' : '#ff5a5a', 26);
+  txt(win ? '五位首领尽数伏诛' : '你倒下了', W / 2, 224, 14, 'rgba(220,200,180,0.55)');
+
+  txt(win ? '终 战' : '止步于', W / 2, 288, 13, 'rgba(210,195,170,0.55)');
+  const b = game.boss;
+  glowTxt(b ? b.name : '—', W / 2, 322, 30, 'rgba(255,235,205,0.95)', 12);
+
+  const killed = win ? BOSSES.length : game.bossIdx;
+  txt('击破 ' + killed + ' / ' + BOSSES.length + ' 位首领', W / 2, 372, 14, 'rgba(220,205,180,0.7)');
+  txt('总伤害 ' + Math.round(game.totalDamage) + '      阵亡 ' + game.deaths + ' 人', W / 2, 400, 13, 'rgba(210,195,170,0.6)');
+
+  txt(game.touchMode ? '点 击 屏 幕 重 来' : '按 R / 回车 重新开始', W / 2, 456, 15, 'rgba(235,220,195,0.75)');
+}
+
+/* ---------------------- 渲染 ---------------------- */
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawBackground();
+
+  if (game.scene === 'title') { drawTitle(); return; }
+
+  ctx.save();
+  if (game.shake > 0.4) ctx.translate(rand(-game.shake, game.shake), rand(-game.shake, game.shake));
+
+  drawArena();
+  drawMechanics();
+  drawBoss();
+  drawUnits();
+  drawFx();
+
+  ctx.restore();
+
+  drawHUD();
+  drawTouchUI();
+  drawBanner();
+
+  if (game.flash > 0) {
+    ctx.fillStyle = 'rgba(' + game.flashColor + ',' + (game.flash * 0.35) + ')';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (game.paused) {
+    ctx.fillStyle = 'rgba(5,4,9,0.72)'; ctx.fillRect(0, 0, W, H);
+    glowTxt('已 暂 停', W / 2, 290, 34, '#e8dcc4', 18);
+    txt('按 P / Esc 继续', W / 2, 336, 14, 'rgba(210,195,170,0.7)');
+  }
+
+  if (game.scene === 'dead' || game.scene === 'win') drawEnd();
+}
+
+function drawBanner() {
+  const b = game.banner;
+  if (!b) return;
+  const k = b.t / b.max;
+  const a = k > 0.75 ? (1 - k) / 0.25 : Math.min(1, k / 0.3);
+  ctx.save();
+  ctx.globalAlpha = clamp(a, 0, 1);
+  ctx.shadowColor = 'rgba(255,180,90,0.65)';
+  ctx.shadowBlur = 22;
+  txt(b.text, W / 2, 268, 42, '#ffe9c0');
+  if (b.sub) txt(b.sub, W / 2, 310, 13, 'rgba(230,210,180,0.75)');
+  ctx.restore();
+}
+
+/* ---------------------- 触屏 UI ---------------------- */
+function drawTouchUI() {
+  if (!game.touchMode || game.scene !== 'playing') return;
+  const S = UIS;
+  if (touch.joyId !== null) {
+    const jx = clamp(touch.ox, 70 * S, W - 70 * S);
+    const jy = clamp(touch.oy, 70 * S, H - 70 * S);
+    ctx.beginPath(); ctx.arc(jx, jy, 62 * S, 0, TAU);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,210,0.45)'; ctx.lineWidth = 2 * S; ctx.stroke();
+    const kx = jx + touch.dx * touch.mag * 58 * S;
+    const ky = jy + touch.dy * touch.mag * 58 * S;
+    ctx.beginPath(); ctx.arc(kx, ky, 26 * S, 0, TAU);
+    ctx.fillStyle = 'rgba(255,240,210,0.3)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,210,0.65)'; ctx.lineWidth = 1.5 * S; ctx.stroke();
+  } else if (!touch.used) {
+    const gx = 150 * S, gy = H - 130 * S;
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.2 * Math.sin(game.time * 2.4);
+    ctx.beginPath(); ctx.arc(gx, gy, 54 * S, 0, TAU);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,240,210,0.4)'; ctx.lineWidth = 2 * S; ctx.stroke();
+    txt('走 位', gx, gy, 15 * S, 'rgba(255,240,210,0.55)');
+    ctx.restore();
+  }
+}
+
+/* ---------------------- 主循环 ---------------------- */
+let lastT = performance.now();
+function loop(now) {
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (dt > 0.05) dt = 0.05;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+(function boot() {
+  const q = new URLSearchParams(location.search);
+  game.touchMode = COARSE || q.has('touch');
+  layout();
+  window.addEventListener('resize', layout);
+  window.addEventListener('orientationchange', () => setTimeout(layout, 260));
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', layout);
+  document.addEventListener('gesturestart', e => e.preventDefault());
+
+  if (q.has('auto')) {
+    if (q.has('role')) game.sel = Math.min(ROLES.length - 1, Math.max(0, Number(q.get('role')) || 0));
+    startRun(game.sel);
+    if (q.has('boss')) {
+      const n = Math.min(BOSSES.length - 1, Math.max(0, Number(q.get('boss')) || 0));
+      game.bossIdx = n - 1;
+      nextBoss();
+    }
+  }
+
+  if (q.has('shot')) {
+    GOD = true;
+    const secs = Number(q.get('shot')) || 4;
+    for (let i = 0; i < Math.round(secs * 60); i++) update(1 / 60);
+    GOD = false;
+    render();
+    return;
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

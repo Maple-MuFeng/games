@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07060b">
+<title>剑网三 · 小游戏合集</title>
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    min-height:100vh;overflow-x:hidden;
+    background:
+      radial-gradient(900px 520px at 18% -8%, rgba(140,90,230,.20), transparent 62%),
+      radial-gradient(900px 520px at 86% 4%, rgba(230,140,70,.16), transparent 60%),
+      linear-gradient(180deg,#0b0810 0%,#100b17 46%,#07060b 100%);
+    color:#e9dcc4;
+    font-family:"KaiTi","STKaiti","Kaiti SC","Noto Serif SC","Songti SC",serif;
+    display:flex;flex-direction:column;align-items:center;
+    padding:56px 22px 64px;
+    -webkit-font-smoothing:antialiased;
+  }
+  header{text-align:center;margin-bottom:44px;}
+  h1{
+    margin:0;font-size:44px;font-weight:400;letter-spacing:6px;
+    color:#f6e7c8;text-shadow:0 0 26px rgba(255,190,120,.35);
+  }
+  .sub{
+    margin:14px 0 0;font-size:14px;letter-spacing:2px;
+    color:rgba(225,205,175,.5);
+  }
+  main{
+    width:100%;max-width:1000px;
+    display:grid;grid-template-columns:1fr 1fr;gap:26px;
+  }
+  .card{
+    min-width:0;
+    display:flex;flex-direction:column;
+    text-decoration:none;color:inherit;
+    background:rgba(17,13,25,.72);
+    border:1px solid rgba(220,195,150,.14);
+    border-radius:16px;overflow:hidden;
+    transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .card:hover,.card:focus-visible{
+    transform:translateY(-6px);
+    border-color:rgba(var(--ac),.55);
+    box-shadow:0 18px 46px rgba(0,0,0,.55), 0 0 0 1px rgba(var(--ac),.18);
+    outline:none;
+  }
+  .thumb{
+    position:relative;aspect-ratio:3/2;overflow:hidden;
+    background:#0d0a13;
+  }
+  .thumb img{
+    width:100%;height:100%;object-fit:cover;display:block;
+    opacity:.88;transition:opacity .18s ease, transform .3s ease;
+  }
+  .card:hover .thumb img{opacity:1;transform:scale(1.02);}
+  .thumb::after{
+    content:"";position:absolute;inset:0;
+    background:linear-gradient(180deg,rgba(7,6,11,0) 46%,rgba(7,6,11,.86) 100%);
+  }
+  .body{padding:18px 20px 22px;display:flex;flex-direction:column;gap:8px;}
+  .title{
+    display:flex;align-items:baseline;gap:10px;
+  }
+  .title h2{
+    margin:0;font-size:25px;font-weight:400;letter-spacing:2px;color:#f2e6cd;
+  }
+  .title .tag{
+    font-size:12px;letter-spacing:1px;color:rgba(var(--ac),.95);
+    border:1px solid rgba(var(--ac),.35);border-radius:999px;padding:2px 9px;
+  }
+  .kv{font-size:12.5px;letter-spacing:1px;color:rgba(220,202,175,.55);}
+  .desc{
+    margin:2px 0 0;font-size:13.5px;line-height:1.75;
+    color:rgba(224,210,190,.72);
+  }
+  .meta{
+    display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;
+  }
+  .meta span{
+    font-size:11.5px;letter-spacing:1px;color:rgba(215,200,175,.62);
+    background:rgba(255,255,255,.045);border-radius:6px;padding:3px 8px;
+  }
+  .enter{
+    margin-top:12px;align-self:flex-start;
+    font-size:13.5px;letter-spacing:3px;color:#0b0810;
+    background:rgb(var(--ac));
+    border-radius:999px;padding:8px 22px;
+    box-shadow:0 6px 18px rgba(var(--ac),.28);
+  }
+  footer{
+    margin-top:46px;max-width:1000px;width:100%;
+    border-top:1px solid rgba(220,195,150,.10);
+    padding-top:20px;
+    font-size:12.5px;line-height:2;color:rgba(210,195,170,.42);
+    text-align:center;letter-spacing:1px;
+  }
+  footer code{
+    font-family:ui-monospace,Consolas,monospace;
+    color:rgba(230,215,185,.6);font-size:12px;
+  }
+  @media (max-width:760px){
+    body{padding:34px 16px 44px;}
+    h1{font-size:31px;letter-spacing:3px;}
+    .sub{font-size:12px;}
+    main{grid-template-columns:1fr;gap:18px;}
+    .title h2{font-size:21px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>江 湖 小 馆</h1>
+  <p class="sub">剑 网 三 · 两 个 小 游 戏 · 双 击 即 玩</p>
+</header>
+
+<main>
+  <a class="card" href="jx3-raid-dodge/index.html" style="--ac:143,125,255">
+    <div class="thumb"><img src="jx3-raid-dodge/preview-title.png" alt="团本躲机制"></div>
+    <div class="body">
+      <div class="title"><h2>团本躲机制</h2><span class="tag">走位</span></div>
+      <div class="kv">七门派 · 六种机制 · 无限刷分</div>
+      <p class="desc">站在首领的预警圈里，靠走位和蹑云活下来。纯阳、天策、万花、刀宗、七秀、五毒、藏剑各有特性，用无敌帧从刀锋上滑过去最爽。</p>
+      <div class="meta"><span>单人</span><span>手感向</span><span>手机可玩</span></div>
+      <span class="enter">进 入</span>
+    </div>
+  </a>
+
+  <a class="card" href="luoyang-raid/index.html" style="--ac:255,184,107">
+    <div class="thumb"><img src="luoyang-raid/preview-title.png" alt="洛阳之战"></div>
+    <div class="body">
+      <div class="title"><h2>洛阳之战</h2><span class="tag">定位</span></div>
+      <div class="kv">四定位 · 五名首领</div>
+      <p class="desc">团队秘境「洛阳之战」的定位演武。选 T、奶妈、近战或远程，用减伤、位移、治疗去应对五位首领的招牌机制。</p>
+      <div class="meta"><span>单人</span><span>定位向</span><span>手机可玩</span></div>
+      <span class="enter">进 入</span>
+    </div>
+  </a>
+</main>
+
+<footer>
+  两个游戏都是单文件，各自在独立目录里，互不覆盖。<br>
+  <code>jx3-raid-dodge/</code> 与 <code>luoyang-raid/</code> 可以整个文件夹单独拷走。
+</footer>
+
+</body>
+</html>
